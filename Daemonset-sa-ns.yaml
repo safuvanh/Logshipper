@@ -1,0 +1,124 @@
+# ------------------------------
+# ServiceAccount for IRSA (attach IAM role ARN here)
+# Replace <ACCOUNT_ID> and <ROLE_NAME> with your values.
+# Example annotation: eks.amazonaws.com/role-arn: arn:aws:iam::123456789012:role/logshipper-role
+# ------------------------------
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: logging
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: logshipper-sa
+  namespace: logging
+  annotations:
+    # IRSA annotation: replace with your role ARN
+    eks.amazonaws.com/role-arn: arn:aws:iam::<ACCOUNT_ID>:role/<ROLE_NAME>
+---
+# ------------------------------
+# DaemonSet: LogShipper
+# Mounts host logs and a hostPath working directory (DirectoryOrCreate)
+# ------------------------------
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: logshipper
+  namespace: logging
+  labels:
+    app: logshipper
+spec:
+  selector:
+    matchLabels:
+      app: logshipper
+  template:
+    metadata:
+      labels:
+        app: logshipper
+    spec:
+      serviceAccountName: logshipper-sa
+      # Run on all nodes (tolerations optional)
+      tolerations:
+        - operator: "Exists"
+      containers:
+        - name: logshipper
+          # Replace <IMAGE> with your built image
+          image: "geojit.azurecr.io/logshipper:v1.0"
+          imagePullPolicy: IfNotPresent
+          # Run as root by default to allow reading host logs. Change if you secure mounts and drop privileges.
+          securityContext:
+            runAsUser: 0
+            runAsGroup: 0
+          env:
+            - name: CONTAINERS_DIR
+              value: "/var/log/containers"
+            - name: PODS_DIR
+              value: "/var/log/pods"
+            - name: TARGET_NS
+              value: "ifsc-uat,las-prod"
+            - name: S3_BUCKET
+              value: "ifsc-eks-logs"
+            - name: CLUSTER_NAME
+              value: "cluster"
+            - name: INTERVAL
+              value: "60"
+            - name: QUIET_WARN_MIN
+              value: "10"
+            - name: EXCLUDE_LIST
+              value: "istio-proxy,istio-init,envoy,proxy,istio"
+            - name: TMP_DIR
+              value: "/var/log/agent-out"
+            - name: APP_NAME
+              value: "logshipper"
+            - name: APP_VERSION
+              value: "v1.0.0"
+            - name: CLEANUP_DAYS
+              value: "7"
+            - name: WATCHDOG_ENABLED
+              value: "true"
+          # Readiness / Liveness endpoints (adjust path/port if your binary uses different)
+          readinessProbe:
+            httpGet:
+              path: /ready
+              port: 8080
+            initialDelaySeconds: 5
+            periodSeconds: 15
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8080
+            initialDelaySeconds: 10
+            periodSeconds: 30
+          resources:
+            requests:
+              cpu: "50m"
+              memory: "64Mi"
+            limits:
+              cpu: "250m"
+              memory: "256Mi"
+          volumeMounts:
+            - name: containers
+              mountPath: /var/log/containers
+              readOnly: true
+            - name: pods
+              mountPath: /var/log/pods
+              readOnly: true
+            - name: agent-out
+              mountPath: /var/log/agent-out
+      # Volumes - hostPath mounts (agent-out uses DirectoryOrCreate)
+      volumes:
+        - name: containers
+          hostPath:
+            path: /var/log/containers
+            type: Directory
+        - name: pods
+          hostPath:
+            path: /var/log/pods
+            type: Directory
+        - name: agent-out
+          hostPath:
+            path: /var/log/agent-out
+            type: DirectoryOrCreate
+      # Optional: allow hostNetwork if you want agent to use host networking (not required)
+      # hostNetwork: false
