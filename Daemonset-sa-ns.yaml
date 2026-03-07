@@ -44,7 +44,7 @@ spec:
       containers:
         - name: logshipper
           # Replace <IMAGE> with your built image
-          image: "geojit.azurecr.io/logshipper:v1.0"
+          image: "****:v1.0"
           imagePullPolicy: IfNotPresent
           # Run as root by default to allow reading host logs. Change if you secure mounts and drop privileges.
           securityContext:
@@ -122,3 +122,4 @@ spec:
             type: DirectoryOrCreate
       # Optional: allow hostNetwork if you want agent to use host networking (not required)
       # hostNetwork: false
+
