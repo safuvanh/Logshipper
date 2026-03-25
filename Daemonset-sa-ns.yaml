@@ -48,8 +48,10 @@ spec:
           imagePullPolicy: IfNotPresent
           # Run as root by default to allow reading host logs. Change if you secure mounts and drop privileges.
           securityContext:
-            runAsUser: 0
-            runAsGroup: 0
+            runAsNonRoot: true
+            runAsUser: 1000
+            runAsGroup: 1000
+            readOnlyRootFilesystem: true
           env:
             - name: CONTAINERS_DIR
               value: "/var/log/containers"
@@ -117,9 +119,7 @@ spec:
             path: /var/log/pods
             type: Directory
         - name: agent-out
-          hostPath:
-            path: /var/log/agent-out
-            type: DirectoryOrCreate
+          emptyDir: {}
       # Optional: allow hostNetwork if you want agent to use host networking (not required)
       # hostNetwork: false
 

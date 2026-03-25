@@ -17,8 +17,9 @@ RUN go mod download
 RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -ldflags="-s -w" -o /app ./cmd/logshipper
 
 # Runtime stage
-FROM alpine:3.22.2
-RUN apk add --no-cache ca-certificates bash
+FROM alpine:3.23.3
+RUN apk add --no-cache ca-certificates bash && \
+    addgroup -g 1000 -S logshipper && adduser -u 1000 -S logshipper -G logshipper
 COPY --from=build /app /usr/local/bin/logshipper
-USER root
+USER 1000:1000
 ENTRYPOINT ["/usr/local/bin/logshipper"]
