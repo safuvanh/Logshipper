@@ -9,6 +9,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 	"context"
@@ -40,7 +41,15 @@ func (a *Agent) uploadOnce() {
 		if len(filename) < 15 { return nil }
 		datePart := filename[len(filename)-14:len(filename)-4]
 		podName := filename[:len(filename)-len("-"+datePart+".log")]
-		key := fmt.Sprintf("%s/%s/%s/%s-%s.log.gz", ns, appName, datePart, podName, datePart)
+
+
+		dateParts := strings.SplitN(datePart, "-", 3)
+		if len(dateParts) != 3 { return nil }
+		year, monthNum, day := dateParts[0], dateParts[1], dateParts[2]
+		mi, err := strconv.Atoi(monthNum)
+		if err != nil || mi < 1 || mi > 12 { return nil }
+		monthName := time.Month(mi).String() // "January", "February", etc.
+		key := fmt.Sprintf("%s/%s/%s/%s/%s/%s-%s.log.gz", ns, appName, year, monthName, day, podName, datePart)
 
 		gzPath, md5hex, err := compressAndMD5(path)
 		if err != nil {
