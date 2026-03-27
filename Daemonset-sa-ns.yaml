@@ -1,8 +1,4 @@
-# ------------------------------
-# ServiceAccount for IRSA (attach IAM role ARN here)
-# Replace <ACCOUNT_ID> and <ROLE_NAME> with your values.
-# Example annotation: eks.amazonaws.com/role-arn: arn:aws:iam::123456789012:role/logshipper-role
-# ------------------------------
+
 apiVersion: v1
 kind: Namespace
 metadata:
@@ -17,10 +13,6 @@ metadata:
     # IRSA annotation: replace with your role ARN
     eks.amazonaws.com/role-arn: arn:aws:iam::<ACCOUNT_ID>:role/<ROLE_NAME>
 ---
-# ------------------------------
-# DaemonSet: LogShipper
-# Mounts host logs and a hostPath working directory (DirectoryOrCreate)
-# ------------------------------
 apiVersion: apps/v1
 kind: DaemonSet
 metadata:
