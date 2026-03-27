@@ -41,6 +41,15 @@ spec:
       # Run on all nodes (tolerations optional)
       tolerations:
         - operator: "Exists"
+      initContainers:
+        - name: fix-permissions
+          image: alpine:3.23.3
+          command: ["sh", "-c", "chown -R 1000:1000 /var/log/agent-out"]
+          securityContext:
+            runAsUser: 0
+          volumeMounts:
+            - name: agent-out
+              mountPath: /var/log/agent-out
       containers:
         - name: logshipper
           # Replace <IMAGE> with your built image
@@ -119,7 +128,9 @@ spec:
             path: /var/log/pods
             type: Directory
         - name: agent-out
-          emptyDir: {}
+          hostPath:
+            path: /var/log/agent-out
+            type: DirectoryOrCreate
       # Optional: allow hostNetwork if you want agent to use host networking (not required)
       # hostNetwork: false
 
