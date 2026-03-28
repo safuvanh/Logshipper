@@ -144,7 +144,9 @@ func (a *Agent) followFile(targetPath, pod, appName, ns string, state *followSta
 					_, _ = f.Seek(0, io.SeekEnd)
 				}
 			} else {
-				// different inode -> start at beginning (policy)
+				// different inode -> rotation happened while we were down
+				// try to drain the old rotated file first to avoid data loss
+				a.drainRotatedFiles(targetPath, dev, ino, off, appName, pod, ns, state)
 				_, _ = f.Seek(0, io.SeekStart)
 			}
 		} else {
@@ -194,6 +196,58 @@ func (a *Agent) followFile(targetPath, pod, appName, ns string, state *followSta
 			a.mu.Unlock()
 		}
 		time.Sleep(100 * time.Millisecond)
+	}
+}
+
+// drainRotatedFiles reads remaining data from rotated log files (0.log.1, 0.log.2, etc.)
+// after detecting that the current 0.log has a different inode than the saved offset.
+// This prevents data loss when log rotation happens while the logshipper is down.
+func (a *Agent) drainRotatedFiles(targetPath string, savedDev, savedIno uint64, savedOff int64, appName, pod, ns string, state *followState) {
+	dir := filepath.Dir(targetPath)
+	base := filepath.Base(targetPath)
+
+	// Collect rotated files: 0.log.1, 0.log.2, etc.
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return
+	}
+
+	var rotated []string
+	for _, e := range entries {
+		name := e.Name()
+		if strings.HasPrefix(name, base+".") && !e.IsDir() {
+			rotated = append(rotated, filepath.Join(dir, name))
+		}
+	}
+
+	for _, rPath := range rotated {
+		rf, err := os.Open(rPath)
+		if err != nil {
+			continue
+		}
+		rStat := getStat(rf)
+
+		// Find the rotated file that matches our saved offset's inode
+		if rStat.Dev == savedDev && rStat.Ino == savedIno {
+			log.Printf("draining rotated file %s from offset %d", rPath, savedOff)
+			if savedOff > 0 {
+				_, _ = rf.Seek(savedOff, io.SeekStart)
+			}
+			reader := bufio.NewReader(rf)
+			for {
+				line, err := reader.ReadString('\n')
+				if len(line) > 0 {
+					a.processLine(appName, pod, ns, line, state)
+				}
+				if err != nil {
+					break
+				}
+			}
+			_ = rf.Close()
+			log.Printf("finished draining rotated file %s", rPath)
+			return
+		}
+		_ = rf.Close()
 	}
 }
 
