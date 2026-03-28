@@ -71,7 +71,7 @@ func splitTrim(s string) []string {
 }
 
 func LoadFromEnv() *Config {
-	rawNS := getenv("TARGET_NS", "ifsc-uat")
+	rawNS := getenv("TARGET_NS", "**")
 
 	return &Config{
 		ContainersDir:   getenv("CONTAINERS_DIR", "/var/log/containers"),

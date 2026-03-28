@@ -10,7 +10,6 @@ metadata:
   name: logshipper-sa
   namespace: logging
   annotations:
-    # IRSA annotation: replace with your role ARN
     eks.amazonaws.com/role-arn: arn:aws:iam::<ACCOUNT_ID>:role/<ROLE_NAME>
 ---
 apiVersion: apps/v1
@@ -33,6 +32,8 @@ spec:
       # Run on all nodes (tolerations optional)
       tolerations:
         - operator: "Exists"
+      securityContext:
+        supplementalGroups: [0]
       initContainers:
         - name: fix-permissions
           image: alpine:3.23.3
@@ -53,6 +54,9 @@ spec:
             runAsUser: 1000
             runAsGroup: 1000
             readOnlyRootFilesystem: true
+            capabilities:
+              add: ["DAC_READ_SEARCH"]
+              drop: ["ALL"]
           env:
             - name: CONTAINERS_DIR
               value: "/var/log/containers"
@@ -114,11 +118,11 @@ spec:
         - name: containers
           hostPath:
             path: /var/log/containers
-            type: Directory
+            type: ""
         - name: pods
           hostPath:
             path: /var/log/pods
-            type: Directory
+            type: ""
         - name: agent-out
           hostPath:
             path: /var/log/agent-out
