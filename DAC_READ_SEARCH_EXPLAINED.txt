@@ -1,0 +1,239 @@
+================================================================================
+          DAC_READ_SEARCH & Linux Capabilities — Detailed Explanation
+================================================================================
+
+1. WHAT IS A "BINARY"?
+----------------------
+A "binary" is simply a compiled program file. In our case:
+
+    /usr/local/bin/logshipper
+
+This is the Go program compiled from our source code. When the container
+starts, the Linux kernel loads this file into memory and executes it.
+
+
+2. THE PROBLEM: NON-ROOT CAN'T READ ROOT-OWNED FILES
+-----------------------------------------------------
+On Kubernetes nodes, pod log files are stored at:
+
+    /var/log/pods/<namespace>_<pod>_<uid>/<container>/0.log
+
+These files are created by kubelet with permissions:
+
+    -rw------- root root   (0600)
+
+This means ONLY root (UID 0) can read them.
+
+Our logshipper runs as UID 1000 (non-root), so:
+
+    os.Open("/var/log/pods/.../0.log")  -->  "permission denied"
+
+
+3. THE OLD WAY: RUN AS ROOT
+----------------------------
+The simplest fix is running the container as root (UID 0). Root can read
+everything. But this is a security risk — if the container is compromised,
+the attacker has root access to the host filesystem.
+
+
+4. THE BETTER WAY: LINUX CAPABILITIES
+--------------------------------------
+Traditionally, Linux had two levels:
+  - Root (UID 0): can do EVERYTHING
+  - Normal user: restricted
+
+Linux "capabilities" split root's superpowers into ~40 individual permissions.
+Instead of giving ALL root powers, you give only the specific one needed.
+
+Some examples of capabilities:
+  - CAP_NET_BIND_SERVICE  = bind to ports below 1024
+  - CAP_KILL              = send signals to any process
+  - CAP_SYS_ADMIN         = mount filesystems, load kernel modules
+  - CAP_DAC_READ_SEARCH   = bypass file read permission checks
+
+DAC stands for "Discretionary Access Control" — the standard Unix rwx
+permission model (user/group/other).
+
+DAC_READ_SEARCH means: "bypass read and directory search permission checks."
+In plain English: "this process can READ any file, regardless of who owns it."
+
+It CANNOT write, delete, or modify files — only read.
+
+
+5. THE THREE CAPABILITY SETS
+-----------------------------
+Every running process in Linux has three capability sets:
+
+  +-------------+----------------------------------------------------------+
+  | Set         | Meaning                                                  |
+  +-------------+----------------------------------------------------------+
+  | BOUNDING    | The maximum set of capabilities the process can EVER     |
+  |             | gain. This is a hard ceiling set by the container.       |
+  +-------------+----------------------------------------------------------+
+  | PERMITTED   | What the process is ALLOWED to use. Must be within the   |
+  |             | bounding set.                                            |
+  +-------------+----------------------------------------------------------+
+  | EFFECTIVE   | What the process is ACTUALLY USING right now. Must be    |
+  |             | within the permitted set. Only this set matters for      |
+  |             | permission checks.                                       |
+  +-------------+----------------------------------------------------------+
+
+Think of it like:
+  BOUNDING  = what your company allows (policy)
+  PERMITTED = what your manager approved (authorization)
+  EFFECTIVE = what you're actively doing (action)
+
+A capability must be in the EFFECTIVE set to actually work.
+
+
+6. THE PROBLEM WITH NON-ROOT + KUBERNETES capabilities.add
+-----------------------------------------------------------
+When you put this in the DaemonSet YAML:
+
+    capabilities:
+      add: ["DAC_READ_SEARCH"]
+
+Kubernetes puts DAC_READ_SEARCH into the BOUNDING set only. For a non-root
+process, the PERMITTED and EFFECTIVE sets remain EMPTY by default.
+
+Result:
+  Bounding:  DAC_READ_SEARCH  (allowed by policy)
+  Permitted: (empty)          (not authorized)
+  Effective: (empty)          (not active)
+
+  --> Still "permission denied" because EFFECTIVE is empty!
+
+
+7. HOW setcap SOLVES THIS
+--------------------------
+The "setcap" command stamps capability metadata directly onto a binary FILE.
+This is stored in the file's extended attributes (xattr) on the filesystem.
+
+In our Dockerfile:
+
+    RUN setcap cap_dac_read_search+ep /usr/local/bin/logshipper
+
+The "+ep" means:
+  +e = when this binary is EXECUTED, put the cap into the EFFECTIVE set
+  +p = when this binary is EXECUTED, put the cap into the PERMITTED set
+
+When the Linux kernel loads /usr/local/bin/logshipper, it checks the file for
+setcap attributes and sees:
+
+    "This binary requests DAC_READ_SEARCH in effective and permitted."
+
+The kernel then checks:
+  1. Is DAC_READ_SEARCH in the BOUNDING set? YES (Kubernetes added it)
+  2. Is privilege escalation allowed? YES (allowPrivilegeEscalation: true)
+  3. OK, grant it.
+
+Result after exec:
+  Bounding:  DAC_READ_SEARCH  (from Kubernetes capabilities.add)
+  Permitted: DAC_READ_SEARCH  (from setcap +p)
+  Effective: DAC_READ_SEARCH  (from setcap +e)
+
+  --> os.Open("/var/log/pods/.../0.log") = SUCCESS!
+
+
+8. WHY allowPrivilegeEscalation: true IS NEEDED
+-------------------------------------------------
+Going from "no capabilities" to "has DAC_READ_SEARCH in effective" is
+considered a "privilege escalation."
+
+Linux has a security flag called "no_new_privs" that blocks this. When set,
+the kernel ignores setcap file attributes entirely.
+
+Kubernetes behavior:
+  - allowPrivilegeEscalation: true   --> no_new_privs is NOT set --> setcap works
+  - allowPrivilegeEscalation: false  --> no_new_privs IS set    --> setcap blocked
+  - Not specified                    --> defaults to TRUE        --> setcap works
+
+NOTE: If your cluster has Pod Security Admission (restricted profile) or
+OPA/Kyverno policies that force allowPrivilegeEscalation: false, then
+setcap will NOT work.
+
+
+9. WHY "kubectl exec -- sh" STILL CAN'T READ THE FILES
+--------------------------------------------------------
+setcap is stamped on a SPECIFIC binary file:
+
+    /usr/local/bin/logshipper  <-- has setcap --> gets DAC_READ_SEARCH
+    /bin/sh                    <-- no setcap  --> gets NOTHING
+
+When you run:
+    kubectl exec -it <pod> -- sh
+
+You get a /bin/sh process, which does NOT have DAC_READ_SEARCH.
+So "ls /var/log/pods" will still show "permission denied."
+
+But the logshipper process (PID 1 in the container) CAN read those files.
+
+To verify it's working, check logshipper's own logs:
+    kubectl logs <pod-name> -n logging
+
+You should see "started follower ->" messages.
+
+
+10. THE THREE REQUIRED PIECES
+------------------------------
+All three are needed. Remove any one and it breaks:
+
+  +---------------------------------------+----------------------------------+
+  | Component                             | What it does                     |
+  +---------------------------------------+----------------------------------+
+  | Dockerfile:                           | Stamps cap on the binary file    |
+  |   setcap cap_dac_read_search+ep       | so kernel grants it at exec time |
+  |   /usr/local/bin/logshipper           |                                  |
+  +---------------------------------------+----------------------------------+
+  | DaemonSet YAML:                       | Allows the cap in the container's|
+  |   capabilities:                       | bounding set (ceiling). Without  |
+  |     add: ["DAC_READ_SEARCH"]          | this, kernel blocks the setcap.  |
+  +---------------------------------------+----------------------------------+
+  | DaemonSet YAML:                       | Disables no_new_privs so the     |
+  |   allowPrivilegeEscalation: true      | setcap elevation is permitted.   |
+  |   (or not specified = defaults true)  | Only needed if policy forces it. |
+  +---------------------------------------+----------------------------------+
+
+  Flow:
+    Dockerfile setcap
+        |
+        v
+    Kubernetes capabilities.add (bounding set)
+        |
+        v
+    allowPrivilegeEscalation: true (no_new_privs disabled)
+        |
+        v
+    Kernel grants DAC_READ_SEARCH at exec time
+        |
+        v
+    logshipper reads /var/log/pods/ files --> SUCCESS
+
+
+11. SECURITY: IS THIS SAFE?
+-----------------------------
+Yes, this is the least-privilege approach:
+
+  - drop: ["ALL"]              --> removes ALL 40+ capabilities
+  - add: ["DAC_READ_SEARCH"]   --> adds back ONLY read-bypass
+
+The logshipper process can:
+  [YES] Read any file on mounted volumes
+  [NO]  Write to protected files
+  [NO]  Kill processes
+  [NO]  Bind privileged ports
+  [NO]  Load kernel modules
+  [NO]  Change file ownership
+  [NO]  Mount filesystems
+  [NO]  Anything else requiring root
+
+This is how production log collectors (Fluent Bit, Filebeat) handle it.
+
+readOnlyRootFilesystem: true adds another layer — the process can't even
+write to the container's own filesystem (only to mounted volumes).
+
+
+================================================================================
+  Created: March 28, 2026
+  Project: Logshipper
+================================================================================

@@ -120,6 +120,7 @@ func (a *Agent) followFile(targetPath, pod, appName, ns string, state *followSta
 
 		f, err = os.Open(targetPath)
 		if err != nil {
+			log.Printf("ERROR: cannot open %s: %v", targetPath, err)
 			time.Sleep(400 * time.Millisecond)
 			continue
 		}

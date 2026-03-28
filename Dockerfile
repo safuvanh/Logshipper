@@ -18,8 +18,9 @@ RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -ldflags="-s -w" -o
 
 # Runtime stage
 FROM alpine:3.23.3
-RUN apk add --no-cache ca-certificates bash && \
+RUN apk add --no-cache ca-certificates bash libcap && \
     addgroup -g 1000 -S logshipper && adduser -u 1000 -S logshipper -G logshipper
 COPY --from=build /app /usr/local/bin/logshipper
+RUN setcap cap_dac_read_search+ep /usr/local/bin/logshipper
 USER 1000:1000
 ENTRYPOINT ["/usr/local/bin/logshipper"]

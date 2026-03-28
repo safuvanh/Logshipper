@@ -54,6 +54,7 @@ spec:
             runAsUser: 1000
             runAsGroup: 1000
             readOnlyRootFilesystem: true
+            allowPrivilegeEscalation: true
             capabilities:
               add: ["DAC_READ_SEARCH"]
               drop: ["ALL"]
