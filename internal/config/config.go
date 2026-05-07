@@ -24,6 +24,7 @@ type Config struct {
 
 	// Output switches
 	S3Enabled bool
+	S3Region  string
 	ESEnabled bool
 
 	// Elasticsearch config
@@ -90,6 +91,7 @@ func LoadFromEnv() *Config {
 		WatchdogEnabled: getenvBool("WATCHDOG_ENABLED", false),
 
 		S3Enabled: getenvBool("ENABLE_S3", false),
+		S3Region:  getenv("S3_REGION", "ap-south-1"),
 		ESEnabled: getenvBool("ENABLE_ES", false),
 
 		ESURL:           getenv("ES_URL", ""),

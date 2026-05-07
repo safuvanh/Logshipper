@@ -31,7 +31,9 @@ type Agent struct {
 }
 
 func New(cfg *config.Config) (*Agent, error) {
-	awsCfg, err := awsConfig.LoadDefaultConfig(context.TODO())
+	awsCfg, err := awsConfig.LoadDefaultConfig(context.TODO(),
+		awsConfig.WithRegion(cfg.S3Region),
+	)
 	if err != nil {
 		return nil, err
 	}
