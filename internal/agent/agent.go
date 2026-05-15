@@ -25,6 +25,11 @@ type Agent struct {
 	followers map[string]*followState
 	checksums map[string]string
 
+	// tracks tmp-file paths that have been successfully uploaded to S3 at least
+	// once; used by sweepOldLogs as a safety net so we never delete a non-today
+	// log file that hasn't been confirmed uploaded.
+	uploaded map[string]bool
+
 	// watchdog state
 	lastActivity map[string]time.Time
 	warned       map[string]bool
@@ -66,6 +71,7 @@ func New(cfg *config.Config) (*Agent, error) {
 		esClient:     esClient,
 		followers:    make(map[string]*followState),
 		checksums:    make(map[string]string),
+		uploaded:     make(map[string]bool),
 		lastActivity: make(map[string]time.Time),
 		warned:       make(map[string]bool),
 	}, nil

@@ -20,7 +20,12 @@ import (
 
 func (a *Agent) uploadLoop() {
 	for {
-		a.uploadOnce()
+		if a.cfg.S3Enabled {
+			a.uploadOnce()
+		}
+		// Always sweep tmp dir so it only ever holds today's (active) log files,
+		// regardless of S3 being enabled or upload errors.
+		a.sweepOldLogs()
 		time.Sleep(time.Duration(a.cfg.IntervalSec) * time.Second)
 	}
 }
@@ -71,12 +76,53 @@ func (a *Agent) uploadOnce() {
 			return nil
 		}
 
-		// CRITICAL: Use UTC to match log timestamps (logs are always in UTC)
-		today := time.Now().UTC().Format("2006-01-02")
-		if datePart != today {
-			_ = os.Remove(path)
-		}
+		// Mark this source file as successfully uploaded so the sweeper is
+		// allowed to delete it once its date is no longer today.
+		a.mu.Lock()
+		a.uploaded[path] = true
+		a.mu.Unlock()
+
 		log.Printf("uploaded %s\n", key)
+		return nil
+	})
+}
+
+// sweepOldLogs deletes any .log file under TmpDir whose embedded date is not
+// today's UTC date. This keeps tmp containing only the currently-active
+// (today's) log files. It runs every interval regardless of S3 state.
+func (a *Agent) sweepOldLogs() {
+	cfg := a.cfg
+	today := time.Now().UTC().Format("2006-01-02")
+
+	_ = filepath.Walk(cfg.TmpDir, func(path string, info os.FileInfo, err error) error {
+		if err != nil || info == nil { return nil }
+		if info.IsDir() { return nil }
+		name := info.Name()
+		if !strings.HasSuffix(name, ".log") { return nil }
+		if len(name) < 15 { return nil }
+
+		datePart := name[len(name)-14 : len(name)-4]
+		// Basic sanity: YYYY-MM-DD
+		if len(datePart) != 10 || datePart[4] != '-' || datePart[7] != '-' { return nil }
+		if datePart == today { return nil }
+
+		// Safety net: if S3 is enabled, only delete files we have confirmed
+		// uploaded at least once. If S3 is disabled, deletion is always allowed.
+		if cfg.S3Enabled {
+			a.mu.Lock()
+			ok := a.uploaded[path]
+			a.mu.Unlock()
+			if !ok {
+				return nil
+			}
+		}
+
+		if err := os.Remove(path); err == nil {
+			a.mu.Lock()
+			delete(a.uploaded, path)
+			a.mu.Unlock()
+			log.Printf("swept old log %s", path)
+		}
 		return nil
 	})
 }
